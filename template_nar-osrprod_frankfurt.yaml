@@ -1,0 +1,686 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "cfn-Add-EC2-Frankfurt-Region"
+
+
+Parameters:
+  RDSMasterUserPassword:
+    Type: String
+    NoEcho: true
+    Description: RDS Master User Password
+
+Mappings:
+  AccountToParam:
+    # sea-dev
+    "110636387318":
+      MonitoringRoleArn: "arn:aws:iam::110636387318:role/rds-monitoring-role"
+      CertificateArn: ""
+    # dev-seapln-osr
+    "716990209761":
+      MonitoringRoleArn: "arn:aws:iam::716990209761:role/rds-monitoring-role"
+      CertificateArn: "arn:aws:acm:eu-central-1:716990209761:certificate/35991408-f768-4680-9487-faed862441d7"
+    # prod-seapln-osr
+    "801004915087":
+      MonitoringRoleArn: "arn:aws:iam::801004915087:role/rds-monitoring-role"
+      CertificateArn: "arn:aws:acm:eu-central-1:801004915087:certificate/fcc1c23a-47a7-4160-9eb2-bea3455c2ad9"
+
+
+Resources:
+#_____________________________________________________
+#
+#  EC2  (Add)
+#_____________________________________________________
+
+# NAR-WEB-API-2 Server
+  NarEC2API2:
+      Type: "AWS::EC2::Instance"
+      Properties:
+          ImageId: "ami-04cf43aca3e6f3de3"
+          InstanceType: "m5.large"
+          KeyName: "PROD-NAR-WEB-AP-KEYPAIR"
+          AvailabilityZone: !ImportValue  ibaws-az-1-ibaws-system-vpc
+          Tenancy: "default"
+          SubnetId: !ImportValue ibaws-az-ibaws-system-vpc-Private1
+          EbsOptimized: true
+          SecurityGroupIds: 
+            - !Ref NarSecurityGroupWeb
+          SourceDestCheck: true
+          BlockDeviceMappings: 
+            - DeviceName: "/dev/sda1"
+              Ebs: 
+                  Encrypted: false
+                  VolumeSize: 100
+#                  SnapshotId: "snap-0c8dd8ceb237c259f"
+                  VolumeType: "gp2"
+                  DeleteOnTermination: false
+          Tags: 
+            - Key: "Name"
+              Value: "NAR-WEB-API-2"
+#          HibernationOptions: 
+#              Configured: false
+          CpuOptions: 
+              CoreCount: 1
+              ThreadsPerCore: 2
+          EnclaveOptions: 
+              Enabled: false
+
+
+
+
+
+#_____________________________________________________
+#
+#  VPC Endpoint  (Add)
+#_____________________________________________________
+
+# S3 External Access Endpoint
+  VPCEndpointS3:
+      Type: "AWS::EC2::VPCEndpoint"
+      Properties:
+          VpcEndpointType: "Gateway"
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+          PolicyDocument: "{\"Version\":\"2008-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"}]}"
+          RouteTableIds: 
+            - !Ref PrivateRouteTable1
+          PrivateDnsEnabled: false
+
+# DynamoDB External Access Endpoint
+  VPCEndpointDynamoDB:
+      Type: "AWS::EC2::VPCEndpoint"
+      Properties:
+          VpcEndpointType: "Gateway"
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          ServiceName: !Sub "com.amazonaws.${AWS::Region}.dynamodb"
+          PolicyDocument: "{\"Version\":\"2008-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"*\",\"Resource\":\"*\"}]}"
+          RouteTableIds: 
+            - !Ref PrivateRouteTable2
+          PrivateDnsEnabled: false
+
+
+
+# for VPCEndpoints Settings
+  PrivateRouteTable1:
+      Type: "AWS::EC2::RouteTable"
+      Properties:
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          Tags:
+            - Key: Name
+              Value: nar-private-rtb1
+
+  PrivateRouteTable2:
+      Type: "AWS::EC2::RouteTable"
+      Properties:
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          Tags:
+            - Key: Name
+              Value: nar-private-rtb2
+
+
+# ----------------------------------------------------------------------#
+# Security
+# ----------------------------------------------------------------------#
+#========================================================================
+# SecurityGroup
+#========================================================================
+
+  NarSecurityGroupALB:
+      Type: "AWS::EC2::SecurityGroup"
+      Properties:
+          GroupDescription: "NAR-ALB-SG"
+          GroupName: "NAR-ALB-SG"
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          SecurityGroupIngress: 
+            - CidrIp: "0.0.0.0/0"
+              FromPort: 80
+              IpProtocol: "tcp"
+              ToPort: 80
+            - CidrIp: "0.0.0.0/0"
+              FromPort: 443
+              IpProtocol: "tcp"
+              ToPort: 443
+          SecurityGroupEgress: 
+            - CidrIp: "0.0.0.0/0"
+              IpProtocol: "-1"
+
+  NarSecurityGroupWeb:
+      Type: "AWS::EC2::SecurityGroup"
+      Properties:
+          GroupDescription: "NAR-WEB-SG"
+          GroupName: "NAR-WEB-SG"
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          SecurityGroupIngress: 
+            # Node.js -> listen port: 3000
+            - CidrIp: "0.0.0.0/0"
+              FromPort: 3000
+              IpProtocol: "tcp"
+              ToPort: 3000
+              # dist-vpc?CIDR [prod] Frankfurt: 10.48.16.0/20
+            - CidrIp: "10.48.16.0/20"
+              FromPort: 22
+              IpProtocol: "tcp"
+              ToPort: 22
+          SecurityGroupEgress: 
+            - CidrIp: "0.0.0.0/0"
+              IpProtocol: "-1"
+
+  NarSecurityGroupBatch:
+      Type: "AWS::EC2::SecurityGroup"
+      Properties:
+          GroupDescription: "NAR-BATCH-SG"
+          GroupName: "NAR-BATCH-SG"
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          SecurityGroupIngress: 
+            # Batch Server: Admin WEB
+            - CidrIp: "0.0.0.0/0"
+              FromPort: 3000
+              IpProtocol: "tcp"
+              ToPort: 3000
+              # dist-vpc CIDR [prod] Frankfurt: 10.48.16.0/20
+            - CidrIp: "10.48.16.0/20"
+              FromPort: 22
+              IpProtocol: "tcp"
+              ToPort: 22
+          SecurityGroupEgress: 
+            - CidrIp: "0.0.0.0/0"
+              IpProtocol: "-1"
+
+
+  NarSecurityGroupDB:
+      Type: "AWS::EC2::SecurityGroup"
+      Properties:
+          GroupDescription: "NAR-DB-SG"
+          GroupName: "NAR-DB-SG"
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          SecurityGroupIngress: 
+            - CidrIp: !Sub "${NarEC2API1.PrivateIp}/32"
+              FromPort: 3306
+              IpProtocol: "tcp"
+              ToPort: 3306
+            - CidrIp: !Sub "${NarEC2API2.PrivateIp}/32"
+              FromPort: 3306
+              IpProtocol: "tcp"
+              ToPort: 3306
+            - CidrIp: !Sub "${NarEC2Batch.PrivateIp}/32"
+              FromPort: 3306
+              IpProtocol: "tcp"
+              ToPort: 3306
+              # dist-vpc CIDR [prod] Frankfurt: 10.48.16.0/20
+            - CidrIp: "10.48.16.0/20"
+              FromPort: 3306
+              IpProtocol: "tcp"
+              ToPort: 3306
+          SecurityGroupEgress: 
+            - CidrIp: "0.0.0.0/0"
+              IpProtocol: "-1"
+
+
+
+#########################################################################
+# Application
+#########################################################################
+#========================================================================
+# EC2
+#========================================================================
+
+# EBS -> Modify with Management console
+#  - recovery from snapshot
+#  - change Name Tag
+
+
+# NAR-WEB-API-1
+  NarEC2API1:
+      Type: "AWS::EC2::Instance"
+      Properties:
+          ImageId: "ami-04cf43aca3e6f3de3"
+          InstanceType: "m5.large"
+          KeyName: "PROD-NAR-WEB-AP-KEYPAIR"
+          AvailabilityZone: !ImportValue ibaws-az-0-ibaws-system-vpc
+          Tenancy: "default"
+          SubnetId: !ImportValue ibaws-az-ibaws-system-vpc-Private0
+          EbsOptimized: true
+          SecurityGroupIds: 
+            - !Ref NarSecurityGroupWeb
+          SourceDestCheck: true
+          BlockDeviceMappings: 
+            - DeviceName: "/dev/sda1"
+              Ebs: 
+                  Encrypted: false
+                  VolumeSize: 100
+                  VolumeType: "gp2"
+                  DeleteOnTermination: false
+          Tags: 
+            - Key: "Name"
+              Value: "NAR-WEB-API-1"
+#            HibernationOptions: 
+#                Configured: false
+          CpuOptions: 
+              CoreCount: 1
+              ThreadsPerCore: 2
+
+
+# NAR-BATCH
+  NarEC2Batch:
+      Type: "AWS::EC2::Instance"
+      Properties:
+          ImageId: "ami-04cf43aca3e6f3de3"
+          InstanceType: "m5.4xlarge"
+          KeyName: "PROD-NAR-BATCH-KEYPAIR"
+          AvailabilityZone: !ImportValue ibaws-az-0-ibaws-system-vpc
+          Tenancy: "default"
+          SubnetId: !ImportValue ibaws-az-ibaws-system-vpc-Private0
+          EbsOptimized: false
+          SecurityGroupIds: 
+            - !Ref NarSecurityGroupBatch
+          SourceDestCheck: true
+          BlockDeviceMappings: 
+            - DeviceName: "/dev/sda1"
+              Ebs: 
+                  Encrypted: false
+                  VolumeSize: 100
+                  VolumeType: "gp2"
+                  DeleteOnTermination: false
+          Tags: 
+            - Key: "Name"
+              Value: "NAR-BATCH"
+#            HibernationOptions: 
+#                Configured: false
+
+
+
+
+
+#========================================================================
+# ELB
+#========================================================================
+  NarElbApi:
+      Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+      Properties:
+          Name: "NAR-ALB-API"
+          Scheme: "internet-facing"
+          Type: "application"
+          Subnets: 
+            - !ImportValue ibaws-az-ibaws-system-vpc-Public0
+            - !ImportValue ibaws-az-ibaws-system-vpc-Public1
+            - !ImportValue ibaws-az-ibaws-system-vpc-Public2
+          SecurityGroups: 
+            - !Ref NarSecurityGroupALB
+          IpAddressType: "ipv4"
+          LoadBalancerAttributes: 
+            - Key: "access_logs.s3.enabled"
+              Value: "true"
+            - Key: "access_logs.s3.bucket"
+              Value: !Ref NarS3BucketLogs
+            - Key: "idle_timeout.timeout_seconds"
+              Value: "3600"
+            - Key: "deletion_protection.enabled"
+              Value: "false"
+            - Key: "routing.http2.enabled"
+              Value: "false"
+            - Key: "routing.http.drop_invalid_header_fields.enabled"
+              Value: "false"
+            - Key: "routing.http.desync_mitigation_mode"
+              Value: "defensive"
+            - Key: "waf.fail_open.enabled"
+              Value: "false"
+
+  NarElbAdmin:
+      Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+      Properties:
+          Name: "NAR-ALB-Admin"
+          Scheme: "internet-facing"
+          Type: "application"
+          Subnets: 
+            - !ImportValue ibaws-az-ibaws-system-vpc-Public0
+            - !ImportValue ibaws-az-ibaws-system-vpc-Public1
+            - !ImportValue ibaws-az-ibaws-system-vpc-Public2
+          SecurityGroups: 
+            - !Ref NarSecurityGroupALB
+          IpAddressType: "ipv4"
+          LoadBalancerAttributes: 
+            - Key: "access_logs.s3.enabled"
+              Value: "true"
+            - Key: "access_logs.s3.bucket"
+              Value: !Ref NarS3BucketLogs
+            - Key: "idle_timeout.timeout_seconds"
+              Value: "3600"
+            - Key: "deletion_protection.enabled"
+              Value: "false"
+            - Key: "routing.http2.enabled"
+              Value: "false"
+            - Key: "routing.http.drop_invalid_header_fields.enabled"
+              Value: "false"
+            - Key: "routing.http.desync_mitigation_mode"
+              Value: "defensive"
+            - Key: "waf.fail_open.enabled"
+              Value: "false"
+
+  NarElbListenerApi:
+      Type: "AWS::ElasticLoadBalancingV2::Listener"
+      Properties:
+          LoadBalancerArn: !Ref NarElbApi
+          Port: 80
+          Protocol: "HTTP"
+          DefaultActions: 
+            - TargetGroupArn: !Ref NarElbTargetGroupApi
+              Type: "forward"
+
+  NarElbListenerApiHttps:
+      Type: "AWS::ElasticLoadBalancingV2::Listener"
+      Properties:
+          LoadBalancerArn: !Ref NarElbApi
+          Port: 443
+          Protocol: "HTTPS"
+          Certificates:
+            - CertificateArn: !FindInMap [AccountToParam, !Ref "AWS::AccountId", CertificateArn]
+          DefaultActions:
+            - TargetGroupArn: !Ref NarElbTargetGroupApi
+              Type: "forward"
+
+  NarElbListenerAdmin:
+      Type: "AWS::ElasticLoadBalancingV2::Listener"
+      Properties:
+          LoadBalancerArn: !Ref NarElbAdmin
+          Port: 80
+          Protocol: "HTTP"
+          DefaultActions: 
+            - TargetGroupArn: !Ref NarElbTargetGroupAdmin
+              Type: "forward"
+
+  NarElbListenerAdminHttps:
+      Type: "AWS::ElasticLoadBalancingV2::Listener"
+      Properties:
+          LoadBalancerArn: !Ref NarElbAdmin
+          Port: 443
+          Protocol: "HTTPS"
+          Certificates:
+            - CertificateArn: !FindInMap [AccountToParam, !Ref "AWS::AccountId", CertificateArn]
+          DefaultActions: 
+            - TargetGroupArn: !Ref NarElbTargetGroupAdmin
+              Type: "forward"
+
+  NarElbTargetGroupApi:
+      Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+      Properties:
+          HealthCheckIntervalSeconds: 30
+          HealthCheckPath: "/hc.txt"
+          Port: 80
+          Protocol: "HTTP"
+          HealthCheckPort: "traffic-port"
+          HealthCheckProtocol: "HTTP"
+          HealthCheckTimeoutSeconds: 5
+          UnhealthyThresholdCount: 2
+          TargetType: "instance"
+          Matcher: 
+              HttpCode: "200"
+          HealthyThresholdCount: 5
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          Name: "NAR-ALB-TARGET-GR-API"
+          HealthCheckEnabled: true
+          TargetGroupAttributes: 
+            - Key: "stickiness.enabled"
+              Value: "false"
+            - Key: "deregistration_delay.timeout_seconds"
+              Value: "300"
+            - Key: "stickiness.type"
+              Value: "lb_cookie"
+            - Key: "stickiness.lb_cookie.duration_seconds"
+              Value: "86400"
+            - Key: "slow_start.duration_seconds"
+              Value: "0"
+            - Key: "load_balancing.algorithm.type"
+              Value: "round_robin"
+          Targets: 
+            - Id: !Ref NarEC2API1
+              Port: 3000
+            - Id: !Ref NarEC2API2
+              Port: 3000        
+
+  NarElbTargetGroupAdmin:
+      Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+      Properties:
+          HealthCheckIntervalSeconds: 30
+          HealthCheckPath: "/hc.txt"
+          Port: 80
+          Protocol: "HTTP"
+          HealthCheckPort: "traffic-port"
+          HealthCheckProtocol: "HTTP"
+          HealthCheckTimeoutSeconds: 5
+          UnhealthyThresholdCount: 2
+          TargetType: "instance"
+          Matcher: 
+              HttpCode: "200"
+          HealthyThresholdCount: 5
+          VpcId: !ImportValue ibaws-vpcId-ibaws-system-vpc-eu-central-1
+          Name: "NAR-ALB-TARGET-GR-ADMIN"
+          HealthCheckEnabled: true
+          TargetGroupAttributes: 
+            - Key: "stickiness.enabled"
+              Value: "false"
+            - Key: "deregistration_delay.timeout_seconds"
+              Value: "300"
+            - Key: "stickiness.type"
+              Value: "lb_cookie"
+            - Key: "stickiness.lb_cookie.duration_seconds"
+              Value: "86400"
+            - Key: "slow_start.duration_seconds"
+              Value: "0"
+            - Key: "load_balancing.algorithm.type"
+              Value: "round_robin"
+          Targets: 
+            - Id: !Ref NarEC2Batch
+              Port: 3000
+
+
+#========================================================================
+# RDS
+#========================================================================
+
+  NarRDSDBCluster:
+      Type: "AWS::RDS::DBCluster"
+      Properties:
+          AvailabilityZones: 
+            - !Sub "${AWS::Region}a"
+            - !Sub "${AWS::Region}b"
+#              - !Sub "${AWS::Region}c"
+          BackupRetentionPeriod: 1
+          DatabaseName: "NAR_DB"
+          DBClusterIdentifier: "nar-db"
+          DBClusterParameterGroupName: !Ref NarRDSDBClusterParameterGroup
+          DBSubnetGroupName: !Ref NarRDSDBSubnetGroup
+          Engine: "aurora"
+          Port: 3306
+          MasterUsername: "narRoot"
+          MasterUserPassword: !Ref RDSMasterUserPassword
+          PreferredBackupWindow: "00:51-01:21"
+          PreferredMaintenanceWindow: "sat:22:03-sat:22:33"
+          VpcSecurityGroupIds: 
+            - !Ref "NarSecurityGroupDB"
+          StorageEncrypted: false
+          EngineVersion: "5.6.mysql_aurora.1.22.2"
+          EnableIAMDatabaseAuthentication: false
+          EnableCloudwatchLogsExports: 
+            - "audit"
+            - "error"
+            - "general"
+            - "slowquery"
+          EngineMode: "provisioned"
+          DeletionProtection: true
+#            EnableHttpEndpoint: false
+
+  NarRDSDBInstance:
+      Type: "AWS::RDS::DBInstance"
+      Properties:
+          DBInstanceIdentifier: "nar-db-instance"
+          DBInstanceClass: "db.r5.large"
+          Engine: "aurora"
+          AvailabilityZone: !Sub "${AWS::Region}a"
+          PreferredMaintenanceWindow: "sat:03:54-sat:04:24"
+          MultiAZ: false
+          EngineVersion: "5.6.mysql_aurora.1.22.2"
+          AutoMinorVersionUpgrade: true
+          LicenseModel: "general-public-license"
+          PubliclyAccessible: false
+          StorageType: "aurora"
+          DBClusterIdentifier: !Ref NarRDSDBCluster
+          MonitoringInterval: 60
+          PromotionTier: 1
+          EnablePerformanceInsights: true
+          PerformanceInsightsRetentionPeriod: 7
+          DBParameterGroupName: !Ref NarRDSDBParameterGroup
+          OptionGroupName: "default:aurora-5-6"
+          # An error will occur if the AmazonRDSEnhancedMonitoringRole policy is not attached to the account used to create the stack. 
+          MonitoringRoleArn: !GetAtt RDSMonitoringRole.Arn
+#         MonitoringRoleArn: !FindInMap [AccountToParam, !Ref "AWS::AccountId", MonitoringRoleArn]
+          CACertificateIdentifier: "rds-ca-2019"
+
+
+  # IAM Role for enhanced monitoring Separately define IAM role with RDS monitoring enhancement policy attached
+  RDSMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      RoleName: "NarDBMonitoringRole"
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "monitoring.rds.amazonaws.com"
+            Action: "sts:AssumeRole"
+
+
+
+
+
+
+
+
+  NarRDSDBSubnetGroup:
+      Type: "AWS::RDS::DBSubnetGroup"
+      Properties:
+          DBSubnetGroupDescription: "NAR DB SUBNET GROUP"
+          DBSubnetGroupName: "nar-db-subnet-gr"
+          SubnetIds: 
+            - !ImportValue ibaws-az-ibaws-system-vpc-Private0
+            - !ImportValue ibaws-az-ibaws-system-vpc-Private1
+
+
+# Custom Parameter Group (Cluster) 
+  NarRDSDBClusterParameterGroup:
+      Type: "AWS::RDS::DBClusterParameterGroup"
+      Properties:
+          Description: "custom-db-cluster-prmtgrp-aurora56"
+          Family: "aurora5.6"
+          Parameters: 
+              binlog_format: "ROW"
+              group_concat_max_len: "300000"
+              character_set_client: "utf8"
+              character_set_connection: "utf8"
+              character_set_database: "utf8"
+              character_set_filesystem: "binary"
+              character_set_results: "utf8"
+              character_set_server: "utf8"
+              general_log: "1"
+              log_output: "FILE"
+              server_audit_events: "QUERY"
+              server_audit_excl_users: "rdsadmin"
+              server_audit_logging: "1"
+              skip-character-set-client-handshake: "1"
+              slow_query_log: "1"
+
+
+# Custom Parameter Group (Instance) 
+  NarRDSDBParameterGroup:
+      Type: "AWS::RDS::DBParameterGroup"
+      Properties:
+          Description: "custom-db-prmtgrp-aurora56"
+          Family: "aurora5.6"
+
+
+
+
+
+#========================================================================
+# DynamoDB
+#========================================================================
+  NarDynamoDBTableSessions:
+      Type: "AWS::DynamoDB::Table"
+      Properties:
+          AttributeDefinitions: 
+            - AttributeName: "session-id"
+              AttributeType: "S"
+          TableName: "sessions"
+          KeySchema: 
+            - AttributeName: "session-id"
+              KeyType: "HASH"
+          ProvisionedThroughput: 
+              ReadCapacityUnits: 5
+              WriteCapacityUnits: 5
+
+  NarDynamoDBTableAuth:
+      Type: "AWS::DynamoDB::Table"
+      Properties:
+          AttributeDefinitions: 
+            - AttributeName: "userSeq"
+              AttributeType: "S"
+          TableName: "auth"
+          KeySchema: 
+            - AttributeName: "userSeq"
+              KeyType: "HASH"
+          ProvisionedThroughput: 
+              ReadCapacityUnits: 5
+              WriteCapacityUnits: 5
+
+#========================================================================
+# S3
+#========================================================================
+# for logs
+  NarS3BucketLogs:
+      Type: "AWS::S3::Bucket"
+      Properties:
+#          "narapi-logs-dev" has already been defined, so it will be abolished. 
+#          BucketName must be unique. 
+#          BucketName: "narapi-logs-dev"
+          BucketName: "narapi-logs-prod-2"
+
+  NarS3BucketPolicyLogs:
+      Type: "AWS::S3::BucketPolicy"
+      Properties:
+          Bucket: !Ref NarS3BucketLogs
+          PolicyDocument: 
+              Version: "2012-10-17"
+#                Id: "AWSConsole-AccessLogs-Policy-1573543449113"
+              Statement: 
+#                  - Sid: "AWSConsoleStmt-1573543449113"
+                - Effect: "Allow"
+                  Principal: 
+                      AWS: "arn:aws:iam::054676820928:root"
+                  Action: "s3:PutObject"
+                  Resource: !Sub "arn:aws:s3:::${NarS3BucketLogs}/AWSLogs/${AWS::AccountId}/*"
+                - Effect: "Allow"
+                  Principal: 
+                      Service: !Sub "logs.${AWS::Region}.amazonaws.com"
+                  Action: "s3:GetBucketAcl"
+                  Resource: !Sub "arn:aws:s3:::${NarS3BucketLogs}"
+                - Effect: "Allow"
+                  Principal: 
+                      Service: !Sub "logs.${AWS::Region}.amazonaws.com"
+                  Action: "s3:PutObject"
+                  Resource: !Sub "arn:aws:s3:::${NarS3BucketLogs}/*"
+#                  - Effect: "Allow"
+#                    Principal: 
+#                        AWS: "arn:aws:iam::110636387318:user/nar_cli"
+#                    Action: "s3:ListBucket"
+#                    Resource: 
+#                      - !Sub "arn:aws:s3:::${NarS3BucketLogs}"
+#                      - !Sub "arn:aws:s3:::${NarS3BucketLogs}/*"
+
+# for public static files
+  NarS3BucketTest:
+      Type: "AWS::S3::Bucket"
+      Properties:
+#          "narapi-pub-dev" has already been defined, so it will be abolished. 
+#          BucketName: "narapi-pub-dev"
+          BucketName: "narapi-pub-prod"
