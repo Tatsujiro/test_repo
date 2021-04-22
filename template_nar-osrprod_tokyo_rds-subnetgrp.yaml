@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "cfn-Add-RDS-SubnetGroup-Tokyo-Region. In actually, has been created RDS Cross Region Read Replica at AWS Management Console. But Add RDS Subnet Group and Parameter Group to Tokyo Region because of can use be manage easy I used that CloudFormation."
+
+
+Mappings:
+  AccountToParam:
+    # sea-dev
+    "110636387318":
+      MonitoringRoleArn: "arn:aws:iam::110636387318:role/rds-monitoring-role"
+      CertificateArn: ""
+    # dev-seapln-osr
+    "716990209761":
+      MonitoringRoleArn: "arn:aws:iam::716990209761:role/rds-monitoring-role"
+      CertificateArn: "arn:aws:acm:ap-northeast-1:716990209761:certificate/35991408-f768-4680-9487-faed862441d7"
+    # prod-seapln-osr
+    "801004915087":
+      MonitoringRoleArn: "arn:aws:iam::801004915087:role/rds-monitoring-role"
+      CertificateArn: "arn:aws:acm:ap-northeast-1:801004915087:certificate/7a363c7d-2532-4acc-a82d-dfc1fa54d28e"
+
+Resources:
+#_____________________________________________________
+#
+#  RDS SubnetGroup
+#_____________________________________________________
+
+  NarRDSDBSubnetGroup:
+      Type: "AWS::RDS::DBSubnetGroup"
+      Properties:
+          DBSubnetGroupDescription: "NAR DB SUBNET GROUP"
+          DBSubnetGroupName: "nar-db-subnet-gr"
+          SubnetIds: 
+            - !ImportValue ibaws-az-ibaws-system-vpc-Private0
+            - !ImportValue ibaws-az-ibaws-system-vpc-Private1
+
+
+# Custom Parameter Group (Cluster) 
+  RDSDBClusterParameterGroup:
+      Type: "AWS::RDS::DBClusterParameterGroup"
+      Properties:
+          Description: "Custom-DB-Cluster-PrmtGrp-Aurora56"
+          Family: "aurora5.6"
+          Parameters: 
+              binlog_format: "ROW"
+              group_concat_max_len: "300000"
+
+
+# Custom Parameter Group (Instance) 
+  RDSDBParameterGroup:
+      Type: "AWS::RDS::DBParameterGroup"
+      Properties:
+          Description: "Custom-DB-PrmtGrp-Aurora56"
+          Family: "aurora5.6"
+
